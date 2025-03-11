@@ -1,0 +1,1434 @@
+---
+title: "How to analyse VMS data"
+author: "Laura Reeves"
+date: "July 11th, 2024"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+## What data is needed and how to request it?
+
+For analysis of fishing activity you will require both VMS (Vessel Monitoring Systems) and landings data. In the UK VMS transmits locational reports (pings) every 2hrs via satellite to the MMO's UK VMS Hub. Data transmitted includes latitude, longitude, speed, heading, date/time and vessel ID. It is an EU requirement that all fishing vessels that are over 12 metres in overall length (OAL) to have VMS installed and transmitting when at sea. For vessels under 12m an I-VMS (Inshore VMS) legislation has been proposed and is expected to be implemented during 2024. This legislation will require all commercial fishing vessels operating in English waters to transmit locational reports when at sea. I-VMS will transmit the same type of positional data as VMS but at a higher frequency (1 ping every 3 mins) using GPRS mobile phone signals. It is important to interpolate if using I-VMS and VMS in the same analysis, as ping frequency differs (2hrs for VMS, 3 mins for I-VMS), this is highlighted later on the document. VMS and/or I-VMS data is converted into a tacsat format, so it can be analysed using the VMS-tools package.
+
+If you want to analyse landings weights, values and fish species caught in certain areas then you will also need logbook/landing data. This can be merged with VMS data to give landings weight/value per ping, which is useful for socio-economic analyses. The IFISH dataset is the most useful for UK landings data and can be requested from the MMO. It contains information on landings weight, value, species caught, vessel ID, departure and return date and voyage ID, this is converted into a eflalo format, so it can be analysed using the VMS-tools package.
+
+When requesting this data it is best to contact the MMO directly requesting VMS data for vessels above 12m and Ifish landings data, with the columns outlined in the formating tacsat and eflalo sections. Specify the vessels you require with a list of their PLN numbers (vessel IDs). Contact the MMO using the email: [accesstoinformation\@marinemanagement.org.uk](mailto:accesstoinformation@marinemanagement.org.uk){.email}
+
+## Installing VMStools
+
+Vmstools is an open-source software package for R, developed to process, analyse and visualize logbook (eflalo) and VMS (tacsat) data. Basic use of VMStools is addressed here but more information and dummy datasets go to the [VMStools Wiki](https://github.com/nielshintzen/vmstools/wiki/Practicals1).
+
+You will need the following packages in order to install VMStools using the code below:
+
+```{r}
+vmstoolsPackages <- c("data.table","doBy","lubridate","sf","mixtools","segmented","ggplot2")
+for(i in vmstoolsPackages) try(install.packages(pkgs=i,repos=getOption("repos")))
+```
+
+Once you have installed these packages you can now install VMS tools. Download the zip file [vmstools_0.77.zip](https://github.com/nielshintzen/vmstools/releases/) from the VMStools github repository.
+
+Next install the VMStools package, remember you will need to change the code to the file path of your downloads folder:
+
+```{r}
+path2VMStoolsDownload <- "C:/downloads/" #Insert file path to download folder
+install.packages(paste(path2VMStoolsDownload,"vmstools_0.77.zip",sep=""))
+```
+
+Now you can load the VMStools package:
+
+```{r}
+library(vmstools)
+```
+
+Here is a list of all other packages required for this script, please make sure to load in the packages each time before running any other code. Please run code in chronological order.
+
+```{r}
+source("functions//packages.R")
+
+# Install and load required packages
+for (package in required_packages) {
+  install_and_load_package(package)
+}
+
+data(europa) #the following data is also required
+class(europa)
+data(ICESareas)
+data("World")#map of the world
+world <- ne_countries(scale = "large", returnclass = "sf")#boundaries using natural earth
+source("functions//setcrs_makevalid.R")
+source("functions//points_on_globe.R")
+source("functions//Duplicate_tacsat.R")
+source("functions//points_on_land.R")
+source("functions//speed_removal.R")
+source("functions//remove_harbours.R")
+source("functions//remove_intervals.R")
+source("functions//remove_duplicate_eflalo.R")
+source("functions//remove_depart_arrive.R")
+source("functions//Metier_species.R")
+source("functions//Assign_width.R")
+source("functions//threshold_value.R")
+source("functions//sort_remove.R")
+source("functions//Interpolate filter.R")
+source("functions//VMShf.R")
+source("functions//Interpolate_function.R")
+source("functions//Gear_speed.R")
+source("functions//Fixed_speed.R")
+source("functions//speed_segmented.R")
+source("functions//store_scheme.R")
+source("functions//Normal_speed.R")
+source("functions//split_pings.R")
+source("functions//ping_site.R")
+source("functions//Location_column.R")
+source("functions//summary_output.R")
+source("functions//summary_size.R")
+source("functions//summary_month.R")
+source("functions//plot_individual_VE.R")
+source("functions//split_pings_id.R")
+source("functions//percentage_plot.R")
+source("functions//Heatmap_settings.R")
+source("functions//Heatmap_plot.R")
+source("functions//Heatmap_updated.R")
+source("functions//Swept_area.R")
+source("functions//Swept_function.R")
+source("functions//Hab_map.R")
+source("functions//Stack_hab.R")
+source("functions//Stack_hab_over.R")
+source("functions//Hab_ping_plot.R")
+source("functions//plot_sensitivity_map.R")
+source("functions//Stack_sens.R")
+source("functions//plot_confidence.R")
+source("functions//plot_MESH_confidence.R")
+source("functions//Stack_sens_over.R")
+source("functions//sens_ping_plot.R")
+source("functions//FishArea.R")
+source("functions//Stack_Fish.R")
+source("functions//Stack_Fish_over.R")
+source("functions//Carbon_map.R")
+source("functions//Stack_Carbon.R")
+source("functions//Stack_Carbon_over.R")
+source("functions//Stack_bio.R")
+source("functions//Swept_area_Sens.R")
+source("functions//Stack_con_over.R")
+source("functions//Swept_area_Con.R")
+source("functions//Stack_MESH.R")
+```
+
+## Plotting your area of interest
+
+It is important to visualise your area/s of interest before you start analysing fishing data within it. Plotting your area of closure is very important, plus you may want to compare fishing intensity within the area of closure to other surrounding areas, or another possible site for an area of closure. Remember to add any other important shapefiles such as area boundaries. Below is an example code using ggplot2 to plot a 5km by 5km area of closure and 10km by 10km and 20km by 20km surrounding areas, which we will compare it to.
+
+```{r}
+# Specify the path to your Bathymetry file
+file_path <- "./raw_data/Bath.tif"
+# Read the file
+img <- raster(file_path)
+#First we define our areas of interest using lat and long
+five_site <- st_read("./raw_data/5km.shp")
+ten_site <- st_read("./raw_data/10km.shp")
+twenty_site <- st_read("./raw_data/20km.shp")
+boundary<-st_read("./raw_data/DSIFCA_Boundary_Fix/DSIFCA_MHW_Boundary.shp")# boundary
+five_site <- transform_and_make_valid(five_site)
+ten_site <- transform_and_make_valid(ten_site)
+twenty_site <- transform_and_make_valid(twenty_site)
+boundary <- transform_and_make_valid(boundary)
+world <- transform_and_make_valid(world)
+ten_hole<- st_difference(ten_site, five_site)#these will also be required for calculating the area of individual sites
+europa<- transform_and_make_valid(europa)
+europa<-st_union(europa)
+europa2<-st_difference(twenty_site,europa)
+europa2<- transform_and_make_valid(europa2)
+twenty_hole<-st_difference(europa2,ten_site)
+boundary_hole<-st_difference(boundary, twenty_site)
+#save each polygon in our processed data file to use later
+save(five_site,file="./processed_data/five.RData")
+save(ten_site,file="./processed_data/ten.RData")
+save(twenty_site,file="./processed_data/twenty.RData")
+save(boundary,file="./processed_data/boundary.RData")
+save(ten_hole,file="./processed_data/ten_hole.RData")
+save(twenty_hole,file="./processed_data/twenty_hole.RData")
+save(boundary_hole,file="./processed_data/boundary_hole.RData")
+save(world,file="./processed_data/world.RData")#save as rds, write.rds/read rds
+
+#now we can plot our areas of interest
+crop_extent <- extent(-5, -1,49, 51) 
+cropped_raster <- crop(img, crop_extent)
+raster_df <- as.data.frame(cropped_raster, xy = TRUE)
+raster_df <- raster_df[raster_df$Bath <= 40, ]
+
+# Define your data layers with their levels ordered
+boundary$layer <- factor("Boundary", levels = c( "Boundary", "400km²" ,"100km²","Closure"))
+twenty_site$layer <- factor("400km²", levels = c( "Boundary", "400km²" ,"100km²","Closure"))
+ten_site$layer <- factor("100km²", levels = c( "Boundary", "400km²" ,"100km²","Closure"))
+five_site$layer <- factor("Closure", levels = c( "Boundary", "400km²" ,"100km²","Closure"))
+europa$layer <- "Europa" # If europa layer should not be in the legend, we keep it as a string
+
+# Adjust the palette and plotting code
+blue_palette <- brewer.pal(9, "Blues") 
+blue_palette <- rev(blue_palette)
+zoomout_map <- ggplot() +   
+  geom_sf(data = europa, fill = "grey", col = NA) +
+  geom_sf(data = five_site, fill = "red", col = "red", linewidth=1)+
+  coord_sf(xlim = c(-10, 2), ylim = c(49.5, 59)) +
+  theme(legend.position = "none") +
+  xlab("Longitude") + ylab("Latitude") +
+  guides(fill = "none") +
+  theme_classic()+
+    theme(
+    axis.title.x = element_text(size = 6), 
+    axis.title.y = element_text(size = 6),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6))
+
+# Plotting code
+zoom_map <- ggplot(raster_df) +   
+  geom_raster(aes(x = x, y = y, fill = Bath)) +
+  geom_sf(data = boundary, aes(color = layer), fill = NA, linewidth=0.8) +
+  geom_sf(data = twenty_site, aes(color = layer), fill = NA, size = 3, linewidth=0.8) +
+  geom_sf(data = ten_site, aes(color = layer), fill = NA, size = 3, linewidth=0.8) +
+  geom_sf(data = five_site, aes(color = layer), fill = NA, size = 3, linewidth=0.8) +
+  geom_sf(data = europa, fill = "grey", color = NA) +
+  scale_color_manual(values = c("Closure" = "red",
+                                "400km²" = "yellow", 
+                                "100km²" = "blue", 
+                                "Boundary" = "darkblue")) +
+  scale_fill_gradientn(colors = blue_palette, name="Depth (m)") + 
+  coord_sf(xlim = c(-4, -2), ylim = c(50, 51)) +
+  xlab("Longitude") + ylab("Latitude") +
+  annotation_scale(location = "bl", width_hint = 0.1) +
+  annotation_north_arrow(location = "bl", which_north = "true", 
+                         pad_x = unit(0.1, "in"), pad_y = unit(0.2, "in"),
+                         height = unit(1, "cm"), width = unit(1, "cm"),
+                         style = north_arrow_fancy_orienteering) +
+  guides(color = guide_legend(title = "Layers", order = 1)) +
+  theme_minimal()
+ggp<- zoom_map+
+  inset(ggplotGrob(zoomout_map), xmin = -4.3, xmax = -3.3, ymin = 50.60, ymax = 51.05)+
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1.5)) 
+ggp
+```
+
+
+For a more interactive plots it is useful to use tmap, so we can zoom in and out of areas of interest.
+
+```{r}
+tmap_mode("plot")
+bbox <- st_bbox(c(xmin = -11, xmax = 2, ymin = 50, ymax = 59), crs = st_crs(europa))#set bounding box for limits
+map <-tm_graticules(lines = FALSE, labels.size = 0.8)+
+  tm_shape(europa, bbox = bbox) +
+  tm_borders(lwd = 1, col = "darkgreen") +  # Customize the base map appearance
+      tm_shape(twenty_site) +
+  tm_borders(lwd = 2, col = "yellow")+
+    tm_shape(ten_site) +
+  tm_borders(lwd = 2, col = "blue")+
+      tm_shape(five_site) +
+  tm_borders(lwd = 2, col = "red") 
+map
+#set tmap to tmap_mode("plot") for a static map, centre? or manual boundaries view
+```
+
+## Formatting tacsat (Your VMS/IVMS data)
+
+Not that we have plotted the our area of interest it is time to format the locational data (VMS/IVMS), Which we transform into a dataset called tacsat. VMStools is very specific in the column headings used for both tacsat and eflalo, please make sure that the following 7 columns are included in your data in the correct format for tacsat, with the correct headings:
+
+-   VE_REF: vessel reference e.g. PLN
+-   SI_LATI: latitude
+-   SI_LONG: longitude
+-   SI_DATE: date in the format day month year, e.g. 02/03/2019, %d/%m/%Y
+-   SI_TIME: time in the format hours, mins, secs, 00:00:00
+-   SI_SP: speed of vessel in knots
+-   SI_HE: heading of vessel in degrees
+
+The next few lines of code are an example of the renaming the column headings and formatting the date and time, you may need to alter this e.g. different column numbers for your data.
+
+```{r}
+VMS <- read.csv("./raw_data/ano_tacsat_8.csv")
+VMS <- as.data.frame(VMS)#turning it into a dataframe
+VMS$Speed..kt. = gsub("\\ kt", "", VMS$Speed..kt.)#removing kt from the speed column
+VMS$Speed..kt.[VMS$Speed..kt.=="-"] <- "NA"#replacing - with NA in the speed column
+VMS$Heading[VMS$Heading=="-"] <- "NA"#replacing - with NA in the heading column
+VMS<-tidyr::separate(VMS,Location.date, c("Location_DATE", "Location_TIME"), sep = " ")#separating date and time into separate columns
+VMS$Location_TIME <- paste(VMS$Location_TIME,":00", sep="")#adding seconds to time
+VMSnew <- VMS[,c(2,5,6,3,4,8,7)]#reording columns
+colnames(VMSnew) <- c("VE_REF","SI_LATI","SI_LONG","SI_DATE","SI_TIME","SI_SP","SI_HE") #renaming columns
+tacsat <- formatTacsat(as.data.frame(VMSnew))#using the format tacsat column to make sure columns are numeric or character
+```
+
+You can double check that your tacsat data is in the correct format using the following code:
+
+```{r}
+head(tacsat)#This shows column headings along with the first 5 lines of tacsat data
+str(tacsat)#This tells you whether variables are character or numeric and number of observations in your dataset
+summarizeTacsat(tacsat)#gives you a summary of max and min tacsat data
+#save your formatted data
+save(tacsat,file="./processed_data/format_tacsat.RData")
+```
+
+You can also check that you have the correct columns and format by looking at the [Exchange_EFLALO2_v2-1.doc](https://github.com/nielshintzen/vmstools/releases/tag/0.0) on the VMStools wiki.
+
+## Formatting eflalo (Your landings/logbook data)
+
+Formatting your landings into the elfalo format will be similar to tacsat formatting e.g. formatting date and time and column headings. However, there are far more columns required for the elfalo dataset and you will need to use the function pivot wider to make sure that there is a separate column for landings weight and value for each fish species. The columns required are listed below:
+
+ * VE_REF: vessel reference e.g. PLN
+ 
+-   VE_FLT: Fleet gear code
+-   VE_COU: Home country
+-   VE_LEN: Vessel length (m)
+-   VE_KW: Vessel power (KW)
+-   VE_TON: Vessel tonnage
+-   FT_REF: Fishing trip reference number (20 character string)
+-   FT_DCOU: Departure country
+-   FT_DHAR: Departure port UN code
+-   FT_DDAT: Departure date in the format day month year, e.g. 02/03/2019, %d/%m/%Y
+-   FT_DTIME: Departure time format 00:00:00
+-   FT_LCOU: Landing country
+-   FT_LHAR: Landing port UN Code
+-   FT_LDAT: Return date in the format day month year, e.g. 02/03/2019, %d/%m/%Y
+-   FT_LTIME: Return time format 00:00:00
+-   LE_ID: Log event ID, 25 character string
+-   LE_CDAT: Catch date in the format day month year, e.g. 02/03/2019, %d/%m/%Y
+-   LE_GEAR: Gear code e.g. DRB
+-   LE_MSZ: Mesh size, mm stretched mesh
+-   LE_RECT: ICES rectangle code e.g. 37F5
+-   LE_DIV: ICES division, 10 character string
+-   LE_MET: Fishing activity (metier), will be filled later
+-   LE_KG: Landed Weight, KGS
+-   LE_EURO: Landings value, we will keep this in GBP
+-   LE_SPP: Species code e.g. SCE
+
+Here is an example of formatting eflalo using the code below:
+
+```{r}
+landings <- read_excel("./raw_data/ano_eflalo_8.xlsx")#Reading in the excel spreadsheet
+landings <- as.data.frame(landings)#make sure it is a dataframe
+landings<-tidyr::separate(landings,DEPARTURE_DATE_TIME, c("DEPARTURE_DATE", "DEPARTURE_TIME"), sep = " ")#separating date and time column
+sum(is.na(landings$DEPARTURE_TIME))#There are some columns with no time recorded
+landings$DEPARTURE_TIME [is.na(landings$DEPARTURE_TIME)] <- "00:00:00" #Removing NAs and replacing with midnight time
+sum(is.na(landings$DEPARTURE_TIME))#now no NAs
+landings<-tidyr::separate(landings,RETURN_DATE_TIME, c("RETURN_DATE", "RETURN_TIME"), sep = " ")
+sum(is.na(landings$RETURN_TIME))
+landings$RETURN_TIME [is.na(landings$RETURN_TIME)] <- "00:00:00" 
+sum(is.na(landings$RETURN_TIME))#repeat for return time
+landings$RETURN_DATE <- as.Date(landings$RETURN_DATE)
+landings$RETURN_DATE <-format(landings$RETURN_DATE ,
+                  "%d/%m/%Y")
+head(landings$RETURN_DATE)#checking return date has been formatted correctly
+landings$DEPARTURE_DATE <- as.Date(landings$DEPARTURE_DATE)
+landings$DEPARTURE_DATE <-format(landings$DEPARTURE_DATE ,
+                              "%d/%m/%Y")#checking departure date has been formatted correctly
+head(landings$DEPARTURE_DATE)
+landings$`Catch date` <- as.Date(landings$`Catch date`)
+landings$`Catch date`  <-format(landings$`Catch date`  ,
+                                 "%d/%m/%Y")
+head(landings$`Catch date` )#checking catch date has been formatted correctly
+```
+
+
+Now that date and time has been formatted correctly the columns need to be renamed and the pivot wider function is required to make a separate column for each fish species, for both landing weight and value.
+
+```{r}
+landings$LE_ID<-paste(landings$VOYAGE_ID,landings$GEAR_CODE,landings$RECTANGLE_CODE, sep = "-")#creating LE_ID if not already present
+landingsnew1 <- landings[,c(1,20,4,5,6,7,8,9,11,12,13,14,16,17,18,29,19,20,21,22,24,27,28,25)]#reordering the columns
+colnames(landingsnew1) <- c("VE_REF","VE_FLT", "VE_COU", "VE_LEN","VE_KW", "VE_TON","FT_REF","FT_DCOU",
+                            "FT_DHAR", "FT_DDAT","FT_DTIME","FT_LCOU","FT_LHAR","FT_LDAT","FT_LTIME","LE_ID",
+                            "LE_CDAT", "LE_GEAR","LE_MSZ","LE_RECT","LE_DIV","LE_KG","LE_EURO","LE_SPP_CODE")#renaming the columns
+LandingsWide <- landingsnew1 %>% 
+  pivot_wider(names_from = LE_SPP_CODE, values_from = c("LE_KG","LE_EURO"))#pivoting wider for each fish species.
+LandingsWide[LandingsWide=="NULL"] <- "0"#replacing NULL values with 0
+LandingsWide[LandingsWide=="-"] <- "0"#replacing - with 0
+LandingsWide[LandingsWide=="NA"] <- "0"#replacing NA with 0
+LandingsWide[is.na(LandingsWide)] <- 0
+eflalo<-formatEflalo(as.data.frame(LandingsWide))
+#save your formatted data
+save(eflalo,file="./processed_data/format_eflalo.RData")
+```
+
+## Cleaning tacsat
+
+Now that both tacsat and eflalo are in the correct format it is time to clean them. This includes checking that points are not on land, in harbour. The vessel speed is not too high, or that other values are not too high.
+
+Firstly we check that points are on earth
+
+```{r}
+load("./processed_data/format_tacsat.RData")#load in your tacsat data
+tacsat <- points_on_globe(tacsat)#use the points_on_globe function which checks that the lat,long and heading is within a certain range and tells you if any outliers have been removed
+```
+Next check for duplicate tacsat readings, with identical vessel ref, location, date and time.
+```{r}
+# This function checks for any duplicate tacsat readings by looking for unique lat,long,date, time and vessel ref. It also shows the number of duplicates that have been removed
+tacsat <- removeDuplicates(tacsat)
+```
+
+Next we will check and plot VMS points on land.
+
+```{r}
+tacsat <- removePointsOnLand(tacsat, europa)#this function identifies and removes points on land, giving a plot of points on land and the number that have been removed
+```
+
+Next we remove speeds that are too high for the vessels            
+
+```{r}
+tacsat <- removeSpeedsAboveThreshold(tacsat, 20)#put in your speed threshold e.g. 20 and the function will remove all speeds greater than it, informing the number removed and returning a histogram of speeds
+```
+
+
+Then we need to remove points that are in harbour.
+
+```{r}
+#Can also check this against a UK harbour list
+data(harbours)
+tacsat <- removePointsInHarbour(tacsat, harbours)#this function removes points in harbours, giving a plot of points in harbour and info of number of points removed
+
+#Check if this is necessary as inshore vessels may be close to harbours, may remove fishing pings
+```
+
+
+Now we look at pseudoduplicates, where intervals between points are close to 0, for our data we have IVMS (at 3 min intervals) and VMS (2hr intervals), so we should have points closer together.
+
+```{r}
+tacsat <- removeIntervals(tacsat, level = "vessel", threshold_low = 1)
+#this removes intervals below a certain threshold and returns a histogram of intervals
+save(tacsat,file="./processed_data/tacsatClean.RData")#save cleaned tacsat data
+```
+
+## Cleaning eflalo
+
+Now that tacsat has been cleaned it is time to clean eflalo, first we will check for duplicate records, as the LE_ID should be unique to each record.
+
+```{r}
+load("./processed_data/format_eflalo.RData")#load in your eflalo data
+eflalo <- remove_Duplicate_eflalo(eflalo, "LE_ID")
+```
+
+Next we want to remove any arrival dates that are before departure dates.
+
+```{r}
+eflalo <- filterDateTime(eflalo)#this function removes these dates and states the number that have been removed
+```
+
+Next we want to ensure that the catch weight is not too large due to human error. Use a factor 30 difference check to see if large catches are significantly larger compared to others of the same species.
+
+```{r}
+# Usage:
+result <- threshold(eflalo, lanThres = 1.5)#This function removes NAs from columns with KG and EURO in, it also removes weights that are 30 times bigger than the second highest catch. The threshold can be changed by adjusting the lanThres value
+eflalo<-result$data_with_nas_fixed
+```
+
+## Defining metiers 
+
+Next we need to assign a metier based on gear type, species grouping and vessel power, this will then be used to assign a gear width to the fishing vessel. Gear width is required to calculate swept area ratios. This is an example that includes both smaller and larger vessels however gear width and metier can really be dependent on fishing fleet and should be considered on a case by case basis after talking to fishers and experts.
+
+```{r}
+metier <- read.csv("./raw_data/Metier_list_of_fish_species.csv")
+#first read in the table that groups fish species into different categories (metiers) these include:
+#ANA	Anadromous species
+#CAT	Catadromous species
+#CEP	Cephalopods
+#CRU	Crustaceans
+#DEF	Demersal fish
+#DWS	Deep-water species
+#EEL	Glass eel
+#FIF	Finfish
+#FWS	Freshwater species
+#LPF	Large pelagic fish
+#MOL	Molluscs
+#SLP	Mixed small and large pelagic fish
+#SPF	Small pelagic fish
+#of these MOL, CEP, CRU, DEF and SPF will probably be most common
+eflalo$VE_LEN<-as.numeric(eflalo$VE_LEN)
+eflalo <- eflalo_met(eflalo_data = eflalo, metier_data = metier)
+#this uses the metier list to assign a metier and returns a plot#
+eflalo <- assign_WIDTH(eflalo, LE_MET)#This assigns a gear width based on metier for surface abrasion
+eflalo <- assign_subsurface_abrasion(eflalo, LE_MET)#this does the same for subsurface abrasion
+save(eflalo,file="./processed_data/eflaloClean.RData")#saving clean eflalo file
+```
+
+
+## Merging tacsat and eflalo
+
+Now that we have cleaned the data, we can merge them. This links landings records and location (VMS/IVMS) together so that we can look at landings weights and values in different areas.
+
+
+```{r}
+
+load("./processed_data/tacsatClean.RData")
+load("./processed_data/eflaloClean.RData")
+
+tacsatp <- sort_remove(tacsat, eflalo)#this function sorts tacsat based on date,time and vessel ref. Then matches them to eflalo, returning the number of records that weren't able to link
+```
+
+
+## Interpolation (Only use if you have both VMS and iVMS data)
+
+If both VMS and IVMS data is used, the ping frequency is not the same. For VMS data ping frequency is once every 2hrs whilst IVMS data is once every 3 mins, thus we need to standardise the ping frequency by creating 40 more data points for each VMS ping, using interpolation. VMS is currently used for vessels >12m in length, so for our study, all vessels >12m switch to VMS from IVMS once outside the boundary.
+```{r}
+#first we filter down to the 12m vessels we need to interpolate, for intervals between 80-200 mins (VMS pings) and the ping before the vessel switches over to IVMS to interpolate from
+
+# Get the datasets and the number of VMS points for interpolation, you can set the upper and lower ping intervals and vessel length
+result <- generateInOutDatasetsPlot(tacsatp, intv_lower=80, intv_upper=200, ve_len_threshold=12)
+
+# name the datasets for later use
+Outside <- result$Outside
+Inside <- result$Inside
+```
+
+Now we have filtered down the data to interpolate, we need to optimise the fm parameter for interpolation depending on gear type.
+
+```{r}
+VMShf <-Inside
+result_table <- calculateOptimalFM(VMShf)#we have done this for intervals of 120 mins but this can be changed within the function
+view(result_table)
+```
+
+Next we need to interpolate the results for each gear type using the fm value that we were given. Either the CHS method or straight line method can be used. For more information on interpolation go to the [VMS-tools wiki](https://github.com/nielshintzen/vmstools/wiki/Practicals5).
+
+
+```{r}
+VMShf <-Outside
+outside_results <- performInterpolation(Outside, result_table)#we are using the CHS method and interpolating intervals of 120 mins to 3 min intervals but this can be changed within the function.
+```
+
+Next we check which points have been interpolated compared to the original VMS points.
+```{r}
+plot(st_geometry(europa),col="darkgreen",xlim=c(-6,0),ylim=c(49,52))
+axis(1); axis(2)
+points(outside_results$SI_LONG, outside_results$SI_LATI,col='red',pch=19,cex=0.5)#interpolated points
+points(Outside$SI_LONG, Outside$SI_LATI,col='grey',pch=19,cex=0.5)#original VMS points
+```
+
+Next we bind the inside and outside co-ordinates back together to give interpolated tacsat data.
+
+```{r}
+outside_results <- dplyr::select(outside_results, -tail(names(outside_results), 5))#drop the last 5 columns
+tacsat <- rbind(Inside, outside_results)#bind the IVMS data to the interpolated VMS data
+save(tacsat,file="./processed_data/tacsatinterp.RData")#save interpolated tacsat
+```
+
+
+## Deciding on fishing speed
+
+Now that we have cleaned and interpolated the data, we need to decide the speeds at which vessels were fishing, we can do this in 3 ways: 1) based on a fixed limit e.g. all vessels are fishing between 2-6 knots, 2) Using a segmented regression which automatically detects fishing versus no-fishing or 3) Fitting a normal density curve based on speed profile, informed by user decisions. For method 3 we can define fishing activity by gear type or metier, as it is likely different gear types fish at different speeds. All Three methods are outlined below.
+
+
+```{r}
+load("./processed_data/tacsatinterp.RData")
+load("./processed_data/eflaloClean.RData")#reload data
+gear_speeds(eflalo, tacsat)#first lets remove speeds that are NA and plot the speeds for each gear type
+```
+
+### 1) Fixed speed
+
+If you already know the approximate speeds for different gear types or want to be more cautious about when a vessel is fishing, it may be appropriate to assign your own speed limits for floating, fishing and steaming, you can assign by gear type if you know the fishing speeds for each gear type.
+```{r}
+fixed_speed <- plot_speed_histogram(tacsat, h = 2, f = 2, s = 6)
+#you can choose limits for floating(h), fishing (f) and steaming(s)
+fixed_speed#plot a histogram of speeds
+view(fixed_speed$data)#shows data
+```
+
+### 2) Segmented regression
+
+Keep in mind that the segmented regression function can only be done on one years worth of data.
+
+```{r}
+result <- processTacsatData(eflalo, tacsat, 1919)#state the year you want to analyse
+#A segmented regression is performed on speed profile and automatically detects fishing versus no-fishing
+view(result$tacsatp)#view your data
+```
+
+### 3) Normal density curve
+
+This is recommended if you have a reasonable amount of data for each gear type and want to analyse more than a years worth of data. You can either identify by means or the number of peaks (default method), a small window will pop up where you will be asked to input this for each gear type, although slightly more labour intensive the results are often more accurate. If analysing by means the number of peaks must be odd, middle peak is always 0 and peaks either side must be the same e.g. -10, -5, 0, 5, 10 for a distribution with 5 peaks.
+```{r}
+X11()
+storeScheme <- analyzeTacsatData(eflalo, tacsat)#first input the number of peaks and position for each gear type
+```
+
+Once you have inputted the peak number, fit normal distributions to the data.
+
+
+```{r}
+tacsat <- nor_dis_tacsat(tacsat)#fit normal distribution
+tacsat <- tacsat[tacsat$SI_STATE != 0, ]#Remove all points where vessel isn't fishing, 0 is no fishing 1 is fishing
+save(tacsat,file="./processed_data/tacsatfish.RData")#save fishing tacsat
+```
+
+## Socio-economic analysis
+
+Now that we have narrowed our tacsat data down to fishing pings we can undertake a socio-enomic analysis for the vessels using it. This outlines the basic factors to consider for the analysis including total catch weight and value, total time spent within the area of closure and species percentages caught. Although you may wish to be more specific depending on the number and type of vessels using the area of closure and if some areas are more heavily fished than others.
+
+
+```{r}
+load("./processed_data/boundary.RData")
+load("./processed_data/five.RData")
+load("./processed_data/ten.RData")
+load("./processed_data/twenty.RData")
+load("./processed_data/world.RData")#reload shapefiles
+load("./processed_data/tacsatfish.RData")#load our tacsat data for when vessel is fishing
+load("./processed_data/eflaloClean.RData")
+tacsat$VE_KW <- eflalo$VE_KW[match(tacsat$FT_REF,eflalo$FT_REF)]#add kWh for analysis
+tacsat<- tacsat%>%
+mutate(kwh = VE_KW*0.05)
+# This splits the landings weights and values among pings
+tacsatEflalo <- split_data_id(tacsat, eflalo)#you may need to split this down into gear type if dataset is large
+save(tacsatEflalo,file="./processed_data/tacsatEflalo.RData")#save
+```
+
+Once we have split landings weights and values depending on pings it is time to calculate the total pings in the area/s of interest.
+
+```{r}
+load("./processed_data/tacsatEflalo.RData")
+site_list <- list(Five = five_site, Ten = ten_site, Twenty = twenty_site, Boundary = boundary)# state our list of sites
+result <- process_pings_list_combined(tacsatEflalo, site_list, inside = TRUE)#state if the sites overlap completely with each other Inside=TRUE.
+print(result$combined_table)#returns table of results of how many pings are within each site (that site only).
+```
+
+Now we can assign the pings to the dataset and aggregate them to the total value, so we can see total catch value within the area of closure, the 10 by 10km and the 20 by 20km surrounding areas.
+```{r}
+options(scipen = 10)
+ping_columns <- c("Five_Pings", "Ten_Pings", "Twenty_Pings", "Boundary_Pings")#list your sites from smallest to largest, if sites overlap the first site stated is the one the Location will be listed as 
+tacsatEflalo <- Location_column(tacsatEflalo, ping_columns)
+#This function finds which location the ping is in and plot
+save(tacsatEflalo,file="./processed_data/tacsatlocation.RData")#save location tacsateflalo
+
+```
+
+Can also analyse catch value based on gear type, vessel size and month of the year.
+```{r}
+load("./processed_data/tacsatlocation.RData")
+location_order <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+summarize_gear(tacsatEflalo, location_order = location_order)#gives you a summary table based on location and gear type
+
+
+# analyse by vessel length e.g. above and below 12m
+summarize_size(tacsatEflalo, length_threshold = 12, location_order = location_order)
+  
+#analyse by month
+summarize_month(tacsatEflalo, location = "Five")#you can subset based on location e.g. within the area of closure
+
+```
+
+This analysis looks at individual vessels, as some may be more adversely impacted than others. If a vessel loses more than 10% of their income due to closure this is a highly impactful.
+
+```{r}
+load("./processed_data/tacsatlocation.RData")
+options(scipen = 10)
+site_list <- list(Five = five_site, Ten = ten_site, Twenty = twenty_site, Boundary = boundary)# state our list of sites
+result <- process_pings_list_combined(tacsatEflalo, site_list, inside = TRUE)#repeat steps from earlier
+
+ping_columns <- c("Five_Pings", "Ten_Pings", "Twenty_Pings", "Boundary_Pings")#repeat steps to reassign location
+tacsatEflalo <- Location_column(tacsatEflalo, ping_columns)
+
+
+VarList <- c("LE_TOT_VAL", "LE_TOT_KG","TIME", "kwh")
+NameList <- c("Value (£)", "Weight (KG)", "Time (hrs)", "Fishing effort (kwh)")
+location_order <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+
+results <- plotISLA_generalized(tacsatEflalo, VarList, NameList, location_order)
+#look to see how many vessels make over 10% of their income, weight and time spent in the area of closure
+
+plot_individual_VE(tacsatEflalo, "Five")#we can also do a monthly average of individual vessels in the area of closure
+save(tacsatEflalo,file="./processed_data/tacsatlocation.RData")
+```
+
+can look at total number of vessels in the dataset to compare how many of them are impacted depending on gear type
+
+```{r}
+highImpact <- subset(results$"Value (£)", valPerc >= 10 & Location == "Five")
+table(highImpact$LE_GEAR)#how many vessels with over 10% of earnings in area of closure
+unique_vessels <- tacsatEflalo%>%
+  group_by(Location, LE_GEAR) %>%
+  summarise(unique_types = n_distinct(VE_REF))#how many vessels of each type using each area
+unique_vessels
+```
+
+##Plotting maps 
+
+For our analysis we will plot spatial heatmaps, however it is probably a good idea to standardise these and have a legend of the heatmap values.
+```{r}
+source("functions//Heatmap_settings.R")#settings for our heatmaps
+```
+
+Once we have set the plot settings we need to define size of the grid and reload our tacsat/eflalo data. You can plot many variables as a heatmap e.g. catch weight and value (LE_TOT_KG and LE_TOT_VAL), TIME and kwh.
+```{r}
+load("./processed_data/tacsatlocation.RData")#load our tacsat data for vessel based on location
+
+#- Define the size of the grid cell
+resx        <- 0.025
+resy        <- 0.025
+
+coords      <- st_as_sf(tacsatEflalo,coords=c("SI_LONG","SI_LATI"))
+st_crs(coords) <- 4326#set crs
+
+result <- Heatmap(
+  coords, 
+  LE_TOT = "TIME", 
+  scale_limits = c(0, 250), 
+  legend_title = "Time (hrs)", 
+  x_limits = c(-3.6, -3.2), 
+  y_limits = c(50.4, 50.7), 
+  additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), 
+  additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash")
+)#add the variable you want to plot as a heatmap, additional shapefiles to be plotted, scale limits and x and y limits
+result$map
+#the function also removes any c-squares containing less than 3 vessels due to privacy requirements- so there might be quite a few missing for smaller subsets.
+```
+
+
+
+##Environmental analysis
+
+###Swept area ratios
+For the environmental analysis it may be useful to analyse how much of the area of closure and surrounding areas are being trawled. This can be done by adding a gear width to each of the different gear types and dividing the total surface area trawled by the total surface area of the area of interest. 
+
+```{r}
+#First reload the data 
+load("./processed_data/tacsatlocation.RData")
+load("./processed_data/eflaloClean.RData")
+
+resx        <- 0.025
+resy        <- 0.025
+tacsatEflalo$LE_WIDTH <- eflalo$LE_WIDTH[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+coords      <- st_as_sf(tacsatEflalo,coords=c("SI_LONG","SI_LATI"))
+st_crs(coords) <- 4326#set coordinates
+coords$LE_WIDTH <- as.numeric(coords$LE_WIDTH)
+result <- SweptArea(
+  coords, 
+  scale_limits = c(0, 12), 
+  legend_title = "Surface SAR", 
+  x_limits = c(-3.6, -3.2), 
+  y_limits = c(50.4, 50.7), 
+  additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), 
+  additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash")
+)
+SAR<-result$map
+SAR
+```
+
+You can also find the swept area ratio for your area of interest
+
+```{r}
+load("./processed_data/ten_hole.RData")
+load("./processed_data/twenty_hole.RData")
+load("./processed_data/boundary_hole.RData")#load in sites with other sites removed
+tacsatEflalo$LE_WIDTH <- eflalo$LE_WIDTH[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+swept <- calculate_swept_area(five_site, ten_hole, twenty_hole, boundary_hole, "Five", "Ten", "Twenty", "Boundary", result)
+swept#this calculates the total swept area ratio of each site, excluding the other sites
+```
+
+You can also do the same for subsurface abrasion (LE_SUB)
+
+```{r}
+tacsatEflalo$LE_WIDTH <- eflalo$LE_SUB[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]#replace width with LE_SUB
+coords      <- st_as_sf(tacsatEflalo,coords=c("SI_LONG","SI_LATI"))
+st_crs(coords) <- 4326#set coordinates
+coords$LE_WIDTH <- as.numeric(coords$LE_WIDTH)
+result <- SweptArea(
+  coords, 
+  scale_limits = c(0, 2), 
+  legend_title = "Subsurface SAR", 
+  x_limits = c(-3.6, -3.2), 
+  y_limits = c(50.4, 50.7), 
+  additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), 
+  additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash")
+)
+SUB<-result$map
+ggp <- ggarrange(SAR,SUB,
+                 labels = c("A.", "B."),    # Plot labels
+                 ncol = 2, nrow = 1,# Arrange in a 2x2 grid
+                 label.x = 0.05, # Adjust the x position of the labels
+                 label.y = 0.8)  
+
+ggp#combining both plots
+
+tacsatEflalo$LE_WIDTH <- eflalo$LE_SUB[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+swept <- calculate_swept_area(five_site, ten_hole, twenty_hole, boundary_hole, "Five", "Ten", "Twenty", "Boundary", result)
+swept
+```
+
+###Habitat types and linking fishing activity
+For most of our environmental analyses we need to link VMS data to habitat data, one such database is the Natural England Marine Evidence Base, a spatial database comprised of the UK combined habitat map and Natural England data. Habitats are classified using the EUNIS (European Nature Information System) classification system. We want to analyse habitat type due to the fact it is likely that vessels will be displaced to areas of similar habitat type.
+
+```{r}
+
+Hab_Type<-st_read("./raw_data/mapsquare.gpkg", layer = "mapsquare")
+Hab_Type<- transform_and_make_valid(Hab_Type)
+```
+
+Now lets look at the habitat type in our area of closure.
+
+```{r}
+load("./processed_data/five.RData")#load our areas of interest
+load("./processed_data/ten.RData")
+load("./processed_data/twenty.RData")
+load("./processed_data/boundary.RData")
+load("./processed_data/ten_hole.RData")
+load("./processed_data/twenty_hole.RData")
+load("./processed_data/boundary_hole.RData")
+Hab_twenty<- st_intersection(Hab_Type, twenty_site)#clip habitat type to HPMA and surrounding areas
+result <- Hab_map(Hab_Type, x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7), additional_shapefiles = list(boundary, five_site, ten_site, twenty_site),   additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"))
+print(result$map)#print a habitat map of the area of closure
+```
+
+Now let us compare the proportion of habitat types to the area of closure
+
+```{r}
+# Example usage of the function
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+result <- Stack_hab(five_site, ten_hole, twenty_hole, boundary_hole, order_locations)
+
+# Print the plot
+result$plot
+View(result$Hab_final)
+```
+Now that we have explored the type of habitats in our area of closure and surrounding areas we can link each IVMS ping to it, to show which habitat types are being trawled most frequently, depending on gear type
+
+```{r}
+load("./processed_data/tacsatlocation.RData")#loading tacsateflalo based on location
+
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+result <- Stack_hab_over(tacsatEflalo, order_locations)
+result$plot
+result$plot2
+tacsatEflalo<-result$tacsatEflalo
+
+map_data <- createMap_hab(data = tacsatEflalo, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site),additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"), additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"),x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+print(map_data$map)
+
+```
+
+However, plotting pings based on ping frequency can be subjective depending on spatial scale of the points, swept area ratios based on habitat type is a more accurate representation. We can do this by overlaying the habitat map onto c-squares then setting the transparency of the habitat colour based on swept area ratio.
+
+###NESSST and linking fishing activity
+
+Benthic habitat sensitivity can also be assessed for different fishing methods (demersal trawling and dredging) and pressures (abrasion and penetration) within the area of closure and surrounding areas, using the Natural England Spatial Sensitivity Tool (NESSST), This is a benthic habitat sensitivity map which uses the Marine Evidence based Sensitivity Assessment (MarESA). The assessment considers the resistance (the likelihood of damage from a pressure) and the resilience (the speed of recovery), the product of these defines the overall sensitivity. The sensitivity is assessed based on a pressure of particular threshold or benchmark and each pressure type is assessed individually. The sensitivity ranges from low to high, with other assessments included such as data deficient and not sensitive, depending on the data and literature available. Use the pressure code sens_Z10_6_D2 for penetration for demersal trawling and sens_Z10_6_D6 for abrasion.
+```{r}
+Hab_Type<-st_read("./raw_data/clipped_NESSST_outputs.gpkg", layer = "BenHabSens_fishing_Filtered_inshore")
+Hab_Type<- transform_and_make_valid(Hab_Type)
+Hab_twenty<- st_intersection(Hab_Type, twenty_site)
+
+Title<-"Sensitivity: penetration from demersal trawling"
+Heading<-"Sensitivity subsurface abrasion"
+
+plot_sensitivity_map(Hab_twenty, sens_Z10_6_D2, Title, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), additional_colors = list("darkgrey", "darkgrey", "darkgrey", "darkgrey"), additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"),Heading, x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+
+#we can also do a bar graph like in the habitat type section above
+names(Hab_Type)[names(Hab_Type) == "sens_Z10_6_D2"] <- "Pressure"#rename your pressure column
+
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+result <- Stack_sens(Hab_Type,Pressure,Title,five_site, ten_hole, twenty_hole, boundary_hole, order_locations,Heading)
+
+
+#And plot fishing effort and ping number
+load("./processed_data/tacsatlocation.RData")#loading tacsateflalo based on location
+
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+
+result <- Stack_sens_over(tacsatEflalo,Hab_Type,Pressure,Title, order_locations)
+tacsatEflalo<-result$tacsatEflalo
+
+createMap_sens(tacsatEflalo, Pressure, Title, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), list("darkgrey", "darkgrey", "darkgrey", "darkgrey"), additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"),Heading, x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+```
+
+We can also link fishing activity and sensitivity, by calculating the swept area of each fishing ping and then multiplying it by the sensitivity, then dividing the sum by the area of the c-square. This gives us the swept sensitivity ratio (SSR). This is an example of it for subsurface abrasion. For surface abrasion change the pressure to sens_Z10_6_D6 and LE_SUB to LE_WIDTH and run from the beginning of the start of the NESSST section.
+
+```{r}
+#- Define the size of the grid cell
+resx        <- 0.025
+resy        <- 0.025
+tacsatEflalo$LE_WIDTH <- eflalo$LE_SUB[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]#replace width with LE_SUB
+coords      <- st_as_sf(tacsatEflalo,coords=c("SI_LONG","SI_LATI"))
+st_crs(coords) <- 4326#set coordinates
+coords$LE_WIDTH <- as.numeric(coords$LE_WIDTH)
+result <- SweptArea_Sens(
+  coords, 
+  scale_limits = c(0, 6), 
+  legend_title = "Sensitivity SAR (SAB)", 
+  x_limits = c(-3.6, -3.2), 
+  y_limits = c(50.4, 50.7), 
+  additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), 
+  additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash")
+)
+SUB<-result$map
+SUB
+swept_SUB <- calculate_swept_area(five_site, ten_hole, twenty_hole, boundary_hole, "Five", "Ten", "Twenty", "Boundary", result)
+swept_SUB#calculate swept area sensitivity for different areas
+names(Hab_Type)[names(Hab_Type) == "Pressure"] <- "sens_Z10_6_D2"#name back afterwards
+```
+
+Confidence scores are also used in sensitivity assessments; these consider the quality of evidence for resistance and resilience, depending on the source quality, how applicable and geographically relevant it is to the area, and the amount of agreement between studies, alongside the MESH confidence score of the confidence in habitat type. The Biotope assignment confidence estimate is also included; this is a score representing a quantitative estimation of the certainty associated with the biotope assigned to mapped habitat.
+
+```{r}
+Title<-"Confidence in simulation"
+custom_labels <- c("Very low", "Low", "Moderate", "High","Very high")
+Name <-"Confidence estimate"
+custom_boundaries <- c(0, 0.25, 0.50, 0.75, 1.0)
+plot_confidence_map(Hab_twenty, uncertainty_sim, Title, Name,custom_boundaries,custom_labels, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site),  additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"), x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+Heading <-"Confidence estimate"
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+result <- Stack_bio(Hab_Type,uncertainty_sim,Title,five_site, ten_hole, twenty_hole, boundary_hole, order_locations,Heading)
+result$plot
+```
+
+Now that we have plotted confidence of biotope we can also look at the confidence level for each pressure based on the quality of evidence for resistance and resilience.
+
+```{r}
+Title<-"Confidence level: penetration from demersal trawling"
+Name <-"Confidence estimate"
+Hab_twenty$Score <- ifelse(Hab_twenty$conf_Z10_6_D2  == 1, 3,
+                           ifelse(Hab_twenty$conf_Z10_6_D2 == 2, 2,
+                           ifelse(Hab_twenty$conf_Z10_6_D2  == 3, 1, 
+                           ifelse(Hab_twenty$conf_Z10_6_D2 == 4, 0, 
+                           ifelse(Hab_twenty$conf_Z10_6_D2  == 0, 0, 0)))))#rescore our column
+custom_boundaries <- c(0, 1, 2,3)
+custom_labels <- c("Not relevent","Low", "Medium","High")
+plot_confidence_map(Hab_twenty, Score, Title, Name,custom_boundaries,custom_labels, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"),  x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+Heading <-"Confidence estimate"
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+names(Hab_Type)[names(Hab_Type) == "conf_Z10_6_D2"] <- "Pressure"
+result <- Stack_con(Hab_Type,Pressure,Title,five_site, ten_hole, twenty_hole, boundary_hole, order_locations,Heading)
+result$plot
+names(Hab_Type)[names(Hab_Type) == "Pressure"] <- "conf_Z10_6_D2"#return names
+```
+
+MESH confidence scores should also be included, which is the confidence in habitat type
+```{r}
+Hab_Type<-st_read("./raw_data/mapsquare.gpkg", layer = "mapsquare")
+Hab_Type<- transform_and_make_valid(Hab_Type)
+MESH_twenty<- st_intersection(Hab_Type, twenty_site)
+Title<-"MESH confidence estimate"
+Name <-"Confidence estimate"
+custom_boundaries <- c(0, 20, 37, 58, 79, 100)
+custom_labels <- c("0", "Very low","Low", "Moderate", "High", "Very high")
+
+plot_MESH_confidence(MESH_twenty, SUM_CONF, Title, Name,custom_boundaries,custom_labels, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"), additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"),  x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7))
+
+Title <-"MESH confidence estimate"# confidence
+Heading <-"MESH confidence"
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+result <- Stack_MESH(Hab_Type,SUM_CONF,Title,five_site, ten_hole, twenty_hole, boundary_hole, order_locations,Heading)
+result$plot
+```
+
+###Fish hotspots, nurseries and spawning grounds
+
+To look at fish hotspots we are using the MMO1133 Essential Fish Habitat gdb. This has a layer that contains the number of fish species (species richness) for spawning grounds, juveniles and adults depending on c-square, based on 29 different fish species. 
+```{r}
+Fish_hotspot <- st_read("./raw_data/data.gdb", layer = "Essential_Fish_Habitat_Hotspots_Adults")
+Fish_hotspot<- transform_and_make_valid(Fish_hotspot)
+Fish_hotspot_twenty<- st_intersection(Fish_hotspot, twenty_site)
+custom_boundaries <- c(0, 3, 6, 9, 12, 15)
+Heading<-"Number of species"
+Title<-"Fish hotspots: Spawning"
+result <- FishArea(Fish_hotspot_twenty,LE_TOT = "spawning", scale_limits = c(0, 15), x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7),Name, custom_boundaries, Title, additional_shapefiles = list(boundary, five_site, ten_site, twenty_site),   additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"),
+  additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"))
+print(result$map)#plotting our fish hotspot can do the same for juvenile and adults, just change LE_TOT
+
+#now make a stacked bar chart of the spawning grounds
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+spawning<-"spawning"
+result1 <- Stack_Fish(spawning,five_site, ten_hole, twenty_hole, boundary_hole, order_locations, Title, Heading)
+result1$plot
+
+#make a stacked barchart of activity
+result <- Stack_Fish_over(tacsatEflalo,Fish_hotspot,spawning,Title,Heading, order_locations)
+
+result$plot
+```
+
+##Blue carbon
+This is based on the inshore blue carbon map from the Natural England Research Report ME5440, fishing pings are linked to blue carbon habitat type
+
+```{r}
+BC <- st_read("./raw_data/BC/final_inshoreBC.gdb", layer = "inshore_BC")
+BC<- transform_and_make_valid(BC)
+BC_twenty<- st_intersection(BC, twenty_site)
+
+result <- Carbon_map(BC_twenty, x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7), additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), additional_colors = list("lightgrey", "lightgrey", "lightgrey", "lightgrey"),
+additional_border_patterns = list("dotted", "solid", "dashed", "dotdash"))
+print(result$map)#print a blue carbon map of the area of closure
+order_locations <- c("Five", "Ten", "Twenty", "Boundary", "Outside")
+SF_CODE<-"SF_CODE"
+result1 <- Stack_Carbon(SF_CODE,five_site, ten_hole, twenty_hole, boundary_hole, order_locations)
+result1$plot
+
+result <- Stack_Carbon_over(tacsatEflalo, BC,SF_CODE,order_locations)
+result$plot
+tacsatEflalo<-result$tacsatEflalo
+```
+
+
+##Predicting displacement
+
+###The percentage distribution model
+
+###The fishing the line model
+```{r}
+#also opportunity to add a buffer on based on latest model, so vessels move to outside the buffer
+five_site <- st_read("./raw_data/5km.shp")
+five_site <- transform_and_make_valid(five_site)
+load("./processed_data/tacsatlocation.RData")
+x<- subset(tacsatEflalo,Location == "Five")
+y<- filter(tacsatEflalo,Location != "Five")
+points  <- st_as_sf(x,coords=c("SI_LONG","SI_LATI"))
+other_points  <- st_as_sf(y,coords=c("SI_LONG","SI_LATI"))
+st_crs(points) <- 4326
+st_crs(other_points) <- 4326
+library(sf)
+library(terra)
+library(tmap)
+library(spData)
+
+tm_shape(five_site) +
+  tm_polygons() +
+  tm_shape(points) +
+  tm_symbols() +
+tm_add_legend("symbol", labels = "Inside points")
+plot(five_site[,1])
+
+five_site_bb = st_as_sfc(st_bbox(five_site))
+plot(five_site_bb)
+plot(five_site[0], add = TRUE)
+
+five_site_bb2 = st_buffer(five_site_bb, 1)
+plot(five_site_bb2, col = "grey")
+plot(five_site[0], add = TRUE)
+
+five_site_bb3 = st_difference(five_site_bb2, five_site)
+plot(five_site_bb3, col = "grey")+
+plot(five_site[0], add = TRUE)
+
+tm_shape(five_site_bb) +
+  tm_polygons() +
+  tm_shape(points) +
+  tm_symbols() 
+
+#~~~~~ st_nearest_points() ~~~~~
+
+system.time(
+  points %>% 
+    mutate(
+      my_linestring = st_nearest_points(geometry, five_site_bb),
+      closest_point = st_cast(my_linestring, 'POINT')[seq(2, nrow(.)*2, 2)],
+      distance = st_distance(geometry, five_site_bb)[,1],
+      snapped_point_cond = st_sfc(ifelse(as.numeric(distance) <= 400, st_geometry(closest_point), geometry), crs = st_crs(five_site_bb))
+    ) %>% 
+    {. ->> closest_points_f1}
+)
+# <0.2 secs
+
+
+ggplot()+
+  geom_sf(data = five_site, col = 'red')+
+  geom_sf(data = closest_points_f1$snapped_point_cond, shape = 1, col = 'blue')
+
+closest_points_f2 = subset(closest_points_f1, select = -c(215,216,217,218) )
+closest_points_f2 <- closest_points_f2 %>%
+  st_drop_geometry("geometry")
+
+st_geometry(closest_points_f2) <- "snapped_point_cond"
+
+closest_points_f2 <- closest_points_f2 %>%
+  rename(geometry = snapped_point_cond)
+
+
+moved_points<-rbind(other_points,closest_points_f2)
+
+ggplot()+
+geom_sf(data = five_site, fill = 'grey')+
+geom_sf(data = moved_points, shape = 1, col = 'blue')+
+  coord_sf(xlim = c(-3.4, -3.32), ylim = c(50.52, 50.58)) +
+  xlab("Longitude") + ylab("Latitude")
+
+tacsatEflalo<-moved_points
+
+save(tacsatEflalo,file="./processed_data/tacsatEflalo_fishing_line.RData")
+
+coords      <- tacsatEflalo
+st_crs(coords) <- 4326#set coordinates
+
+resx        <- 0.025
+resy        <- 0.025
+coords$LE_WIDTH <- as.numeric(coords$LE_WIDTH)
+result <- SweptArea(coords, scale_limits = c(0, 10), x_limits = c(-3.6,-3.2), y_limits = c(50.4,50.7), additional_shapefiles = list(boundary, five_site, ten_site, twenty_site), additional_colors = list("darkblue","black", "blue", "yellow"))
+print(result$map)
+result$map+
+geom_sf(data=five_site,colour=1,fill="white")
+
+load("./processed_data/eflaloClean.RData")
+tacsatEflalo$LE_WIDTH <- eflalo$LE_WIDTH[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+tacsatEflalo$TR_AREA <- (tacsatEflalo$TIME / 60) * (tacsatEflalo$LE_WIDTH / 1000) * (tacsatEflalo$SI_SP *1.852)
+
+total_area <- tacsatEflalo %>%
+  group_by(Location) %>%
+  summarise(total_value = sum(TR_AREA))
+(154.55368)/((sum(st_area(ten_site))-sum(st_area(five_site)))/1000000)
+```
+
+###The habitat similarity model
+```{r}
+library(sf)
+library(terra)
+library(tmap)
+library(spData)
+load("./processed_data/tacsatlocation.RData")#loading tacsateflalo based on loc
+tacsatEflalo <- st_as_sf(tacsatEflalo,coords=c("SI_LONG","SI_LATI"))
+st_crs(tacsatEflalo) <- 4326
+
+Hab_Type<-st_read("./raw_data/mapsquare.gpkg", layer = "mapsquare")
+Hab_Type <- st_make_valid(Hab_Type)
+st_crs(Hab_Type) <- 4326#setting crs
+
+idx     <- st_over(tacsatEflalo,Hab_Type)
+tacsatEflalo$HAB_TYPE <- Hab_Type$HAB_TYPE[idx]
+
+five_site <- st_read("./raw_data/5km.shp")
+five_site <- transform_and_make_valid(five_site)
+
+
+
+x<- subset(tacsatEflalo,Location == "Five")#filtering down to points within HypHPMA
+y<- filter(tacsatEflalo,Location != "Five")#filtering to points outside HypHPMA
+
+points  <- st_as_sf(x,coords=c("SI_LONG","SI_LATI"))
+other_points  <- st_as_sf(y,coords=c("SI_LONG","SI_LATI"))
+st_crs(points) <- 4326
+st_crs(other_points) <- 4326#setting crs
+
+Hab_five_hole<- st_difference(Hab_Type, five_site)#removing hab polygons within HypHPMA
+
+habitat_types <- unique(points$HAB_TYPE)#finding unique hab types
+
+
+ten<- st_intersection(Hab_five_hole, ten_site)#cut down to ten site save time
+Hab_five_hole <- st_make_valid(ten)
+st_crs(Hab_five_hole) <- 4326#setting crs
+
+
+
+combined_results <- data.frame(
+  HAB_TYPE = character(),  # adjust column names accordingly
+  geometry = st_sfc()  # initialize an empty geometry column
+)
+
+polygons_filtered <- Hab_five_hole %>%
+  filter(HAB_TYPE == 'A5.44')
+points_filtered <- points[points$HAB_TYPE == 'A5.44', ]
+
+roads<-polygons_filtered 
+my_points<-points_filtered 
+
+for (habitat in habitat_types) {
+  # Filter points for the current habitat type
+  my_points <- points[points$HAB_TYPE == habitat, ]
+  # Filter polygons for the same habitat type
+  roads <- Hab_five_hole[Hab_five_hole$HAB_TYPE == habitat, ]
+closest_points <- my_points %>% 
+  rowwise() %>%
+  mutate(
+    ##  Get the nearest river segment linestring:
+    nearest_segment = roads[st_nearest_feature(geometry, 
+                                               roads),],
+    ## Get the linestrings between each point and the closest segment:
+    line_to_point = st_nearest_points(geometry, nearest_segment),
+    ##  Retrieve the point from the line sf that was returned:
+    closest_point = st_cast(line_to_point, 'POINT')[2],
+    ##  Calculate the distance between the old and new point:     
+    distance = st_distance(geometry, closest_point)[,1],
+    ##  If under our limit of 100m distant, adopt the new geometry, 
+    ##  else keep the original
+    snapped_point_cond = st_sfc(ifelse(as.numeric(distance) <= 1, 
+                                       st_geometry(closest_point),
+                                       geometry), 
+                                crs = st_crs(roads)))
+combined_results <- rbind(combined_results, closest_points)
+}
+
+ggplot() +
+  geom_sf(data = Hab_five_hole, aes(color = Hab_five_hole$HAB_TYPE))+
+  geom_sf(data = combined_results$closest_point, aes(color = combined_results$HAB_TYPE))+
+  coord_sf(xlim = c(-3.4, -3.32), ylim = c(50.52, 50.58))+
+  theme(legend.position = "none")
+
+combined_results<- combined_results %>%
+  st_drop_geometry("geometry")
+
+
+st_geometry(combined_results) <- "closest_point"
+
+combined_results = subset(combined_results, select = -c(216:220) )
+
+combined_results <- combined_results %>%
+  rename(geometry = closest_point)
+
+
+moved_points<-rbind(other_points,combined_results)
+
+ggplot() +
+  geom_sf(data = Hab_five_hole, aes(color = Hab_five_hole$HAB_TYPE))+
+  geom_sf(data = moved_points, aes(color = moved_points$HAB_TYPE))+
+  coord_sf(xlim = c(-3.4, -3.32), ylim = c(50.52, 50.58))+
+  theme(legend.position = "none")
+
+tacsatEflalo<-moved_points
+
+save(tacsatEflalo,file="./processed_data/tacsatEflalo_hab_displace.RData")
+
+tacsatEflalo$LE_WIDTH <- eflalo$LE_WIDTH[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+tacsatEflalo$TR_AREA <- (tacsatEflalo$TIME / 60) * (tacsatEflalo$LE_WIDTH / 1000) * (tacsatEflalo$SI_SP *1.852)
+total_value <- tacsatEflalo %>%
+  group_by(Location,HAB_TYPE) %>%
+  summarise(total_area = sum(TR_AREA))
+
+```
+
+
+###The catch similarity model
+
+https://www.researchgate.net/figure/Recommended-gears-for-inclusion-gear-widths-and-speeds_tbl2_315758420 website for gear widths
+
+```{r}
+load("./processed_data/tacsatlocation.RData")
+load("./processed_data/eflaloClean.RData")
+tacsatEflalo$LE_WIDTH <- eflalo$LE_WIDTH[match(tacsatEflalo$FT_REF,eflalo$FT_REF)]
+tacsatEflalo$LE_WIDTH <- as.numeric(tacsatEflalo$LE_WIDTH)
+tacsatEflalo$TR_AREA <- (tacsatEflalo$TIME) * (tacsatEflalo$LE_WIDTH / 1000) * (tacsatEflalo$SI_SP *1.852)
+summary_data <- tacsatEflalo %>%
+  group_by(Location, VE_REF) %>%
+  summarize(Total_Time = sum(TIME))
+pivot_data <- summary_data %>%
+  pivot_wider(names_from = Location, values_from = Total_Time)
+pivot_data[is.na(pivot_data)] <- 0
+pivot_data$total <- pivot_data$Ten + pivot_data$Twenty+ pivot_data$Boundary+pivot_data$Outside
+pivot_data$After_ten<-pivot_data$Ten +((pivot_data$Five*pivot_data$Ten)/pivot_data$total)
+pivot_data$After_twenty<-pivot_data$Twenty+((pivot_data$Five*pivot_data$Twenty)/pivot_data$total)
+pivot_data$After_boundary<-pivot_data$Boundary+((pivot_data$Five*pivot_data$Boundary)/pivot_data$total)
+pivot_data$After_outside<-pivot_data$Outside+((pivot_data$Five*pivot_data$Outside)/pivot_data$total)
+pivot_data$Total <- pivot_data$Ten + pivot_data$Twenty+ pivot_data$Boundary+pivot_data$Outside
+
+# Identify numeric columns
+numeric_cols <- sapply(pivot_data, is.numeric)
+
+# Sum numeric columns
+numeric_sum <- colSums(pivot_data[, numeric_cols], na.rm = TRUE)
+numeric_sum
+
+######now for grid
+subset_vessel<-tacsatEflalo
+subset_df <- subset_vessel[subset_vessel$Location == "Five", ]
+time_sum <- sum(subset_df$TIME)
+subset_total <- subset_vessel[subset_vessel$Location != "Five", ]
+total_time_sum <- sum(subset_total$TIME)
+
+#- Define the size of the grid cell
+resx <- 0.025
+resy <- 0.025
+
+coords <- st_as_sf(subset_total, coords = c("SI_LONG", "SI_LATI"))
+st_crs(coords) <- 4326  # set crs
+
+areaInt <- subset(ICESareas, Area_27 %in% c("4.a", "4.b", "4.c", "7.d", "7.e", "7.h", "7.f", "7.g", "7.a", "6.a", "7.b", "7.j.2"))
+areaRef <- subset(ICESareas, Area_27 %in% c("7.f", "7.e"))
+
+bbox <- cbind(matrix(st_bbox(areaInt), ncol = 2),
+              matrix(st_bbox(areaRef), ncol = 2))
+rownames(bbox) <- c("x", "y")
+
+spatBound <- list(xrange = c(floor(range(bbox["x", ])[1]), ceiling(range(bbox["x", ])[2])),
+                  yrange = c(floor(range(bbox["y", ])[1]), ceiling(range(bbox["y", ])[2])))
+grd <- createGrid(spatBound$xrange, spatBound$yrange, resx, resy, type = "GridDF", exactBorder = TRUE)
+
+st_crs(grd) <- 4326
+
+grd$data <- 0
+
+subset_total <- intervalTacsat(subset_total, level = "vessel", fill.na = TRUE)
+
+idx <- st_over(coords, grd)
+subset_total$gridID <- idx
+
+grd$data[an(names(table(idx)))] <- aggregate(subset_total$TIME, by = list(subset_total$gridID), FUN = sum, na.rm = TRUE)$x
+grd$data <- grd$data # Divide to get to hrs
+grd$data <- (grd$data) + ((grd$data * time_sum) / (total_time_sum))  # now for time increase
+
+
+# Initialize an empty grid
+grd_merged <- grd
+grd_merged$data <- 0
+
+# Assuming 'VE_REF' is a column in subset_total
+vessel_list <- unique(tacsatEflalo$VE_REF)
+
+
+for (vessel in vessel_list) {
+  subset_vessel <- tacsatEflalo[tacsatEflalo$VE_REF == vessel, ]
+  subset_df <- subset_vessel[subset_vessel$Location == "Five", ]
+  time_sum <- sum(subset_df$TIME)
+  subset_total <- subset_vessel[subset_vessel$Location != "Five", ]
+  total_time_sum <- sum(subset_total$TIME)
+  
+  #- Define the size of the grid cell
+  resx <- 0.025
+  resy <- 0.025
+  
+  coords <- st_as_sf(subset_total, coords = c("SI_LONG", "SI_LATI"))
+  st_crs(coords) <- 4326  # set crs
+  
+  areaInt <- subset(ICESareas, Area_27 %in% c("4.a", "4.b", "4.c", "7.d", "7.e", "7.h", "7.f", "7.g", "7.a", "6.a", "7.b", "7.j.2"))
+  areaRef <- subset(ICESareas, Area_27 %in% c("7.f", "7.e"))
+  
+  bbox <- cbind(matrix(st_bbox(areaInt), ncol = 2),
+                matrix(st_bbox(areaRef), ncol = 2))
+  rownames(bbox) <- c("x", "y")
+  
+  spatBound <- list(xrange = c(floor(range(bbox["x", ])[1]), ceiling(range(bbox["x", ])[2])),
+                    yrange = c(floor(range(bbox["y", ])[1]), ceiling(range(bbox["y", ])[2])))
+  grd <- createGrid(spatBound$xrange, spatBound$yrange, resx, resy, type = "GridDF", exactBorder = TRUE)
+  
+  st_crs(grd) <- 4326
+  
+  grd$data <- 0
+  
+  subset_total <- intervalTacsat(subset_total, level = "vessel", fill.na = TRUE)
+  
+  idx <- st_over(coords, grd)
+  subset_total$gridID <- idx
+  
+  grd$data[an(names(table(idx)))] <- aggregate(subset_total$TIME, by = list(subset_total$gridID), FUN = sum, na.rm = TRUE)$x
+  grd$data <- grd$data # Divide to get to hrs
+  grd$data <- (grd$data) + ((grd$data * time_sum) / (total_time_sum))  # now for time increase
+  
+  grd_merged$data <- grd_merged$data + grd$data
+}
+
+############now for grd orginal data
+
+subset_vessel <- tacsatEflalo
+subset_total <- subset_vessel[subset_vessel$Location != "Five", ]
+total_time_sum <- sum(subset_total$TIME)
+
+#- Define the size of the grid cell
+resx <- 0.025
+resy <- 0.025
+
+coords <- st_as_sf(subset_total, coords = c("SI_LONG", "SI_LATI"))
+st_crs(coords) <- 4326  # set crs
+
+areaInt <- subset(ICESareas, Area_27 %in% c("4.a", "4.b", "4.c", "7.d", "7.e", "7.h", "7.f", "7.g", "7.a", "6.a", "7.b", "7.j.2"))
+areaRef <- subset(ICESareas, Area_27 %in% c("7.f", "7.e"))
+
+bbox <- cbind(matrix(st_bbox(areaInt), ncol = 2),
+              matrix(st_bbox(areaRef), ncol = 2))
+rownames(bbox) <- c("x", "y")
+
+spatBound <- list(xrange = c(floor(range(bbox["x", ])[1]), ceiling(range(bbox["x", ])[2])),
+                  yrange = c(floor(range(bbox["y", ])[1]), ceiling(range(bbox["y", ])[2])))
+grd <- createGrid(spatBound$xrange, spatBound$yrange, resx, resy, type = "GridDF", exactBorder = TRUE)
+
+st_crs(grd) <- 4326
+
+grd$data <- 0
+
+subset_total <- intervalTacsat(subset_total, level = "vessel", fill.na = TRUE)
+
+idx <- st_over(coords, grd)
+subset_total$gridID <- idx
+
+grd$data[an(names(table(idx)))] <- aggregate(subset_total$TIME, by = list(subset_total$gridID), FUN = sum, na.rm = TRUE)$x
+grd$data <- grd$data  # Divide to get to hrs
+grd$data[is.na(grd$data)] <- 0
+grd_merged[is.na(grd_merged)] <- 0
+grd$data<-grd_merged$data-grd$data
+
+
+load("./processed_data/five.RData")#load our areas of interest
+load("./processed_data/ten.RData")
+load("./processed_data/twenty.RData")
+load("./processed_data/boundary.RData")
+
+grd$data[grd$data <= 0] <- NA
+baseMap <- ggplot() +
+  geom_sf(data = europa, colour = 1, fill = "darkgreen") +
+  geom_sf(data = grd, mapping = aes(fill = data), color = NA) +
+scale_fill_viridis(discrete = FALSE, na.value = "transparent", limits = c(0,20), name = legend_title) +
+  geom_sf(data = europa, colour = 1, fill = "darkgreen") +
+  xlim(x_limits = c(-3.6,-3.2)) +
+  ylim(y_limits = c(50.4,50.7)) +
+  labs(x = xl$label, y = yl$label) +
+  geom_sf(data = five_site, colour = "white", fill = "white") +
+  geom_sf(data = ten_site, colour = "blue", fill = NA) +
+  geom_sf(data = twenty_site, colour = "yellow", fill = NA) +
+  geom_sf(data = boundary, colour = "darkblue", fill = NA) +
+  theme_bw() +
+  theme(plot.margin = unit(c(10, 10, 10, 10), "mm"),
+        axis.title = element_text(face = xl$font, size = rel(xl$cex)))
+baseMap
+
+pdf(file = "./processed_data/Figure.2.pdf",   # The directory you want to save the file in
+    width = 6, # The width of the plot in inches
+    height = 4) 
+baseMap 
+dev.off()
+
+```
+
+##Plotting static fishing permits
+
+```{r}
+library("scatterpie")
+ports <- read.csv("./raw_data/ports.csv")
+n <- nrow(ports)
+baseMap<-ggplot() + 
+  
+  geom_sf(data = five_site, colour = "red", fill = NA) +
+  geom_sf(data = ten_site, colour = "blue", fill = NA) +
+  geom_sf(data = twenty_site, colour = "yellow", fill = NA) +
+  geom_sf(data = boundary, colour = "darkblue", fill = NA) +
+  geom_sf(data = europa, colour = 1, fill = "grey") +
+  geom_scatterpie(aes(x=Long, y=Lat, group=region,r=Rad/100),
+                  data=ports, cols=c("Potting", "Netting"), color=NA, alpha=.8) +
+  geom_scatterpie_legend(ports$Rad/100, x=-3.12, y=50.15, labeller=function(x) round(((x * 100)^2)*pi)) +
+  coord_sf(xlim = c(-3.8, -3),
+           ylim = c(50.1,50.7))+
+  xlab("Longitude") + ylab("Latitude")+
+  labs(fill="Gear Type")+
+  theme_classic() +
+  theme(panel.background = element_rect(fill = 'lightblue'))+
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1))+
+  theme(plot.margin = unit(c(10, 10, 10, 10), "mm"),
+        axis.title = element_text(face = xl$font, size = rel(xl$cex)))
+
+
+pdf(file = "./processed_data/Figure.2.pdf",   # The directory you want to save the file in
+    width = 6, # The width of the plot in inches
+    height = 5) 
+baseMap 
+dev.off()
+```
+
+```{r}
+#total species weight
+load("./processed_data/tacsatEflalo_ID.RData")
+location_a_data <- subset(tacsatEflalo, Location == "Five")
+sum(location_a_data$LE_KG_SYC)
+numeric_columns <- sapply(location_a_data, is.numeric)
+ sums<- colSums(location_a_data[, numeric_columns])
+view(sums)
+
+sum(location_a_data$LE_KG_WHE)
+```
+
