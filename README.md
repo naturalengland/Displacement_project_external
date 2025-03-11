@@ -26,4 +26,4 @@ The authors would like to thank David Warwick from Seafish for his assistance on
 For more information on the VMStools package used in the analysis, please refer to the paper: Hintzen, N.T., Bastardie, F., Beare, D., Piet, G.J., Ulrich, C., Deporte, N., Egekvist, J. and Degel, H., 2012. VMStools: open-source software for the processing, analysis and visualisation of fisheries logbook and VMS data. Fisheries Research, 115, pp.31-43.
 Or the Wiki: https://github.com/nielshintzen/vmstools/wiki 
 ## Contact information
-For further information, or if you have any issues or queries with the code or documentation, please contact the repository manager Laura Reeves (laura.reeves@naturalengland.org.uk).
+For further information, or if you have any issues or queries with the code or documentation, please contact the repository manager Laura Reeves (laura.reeves@naturalengland.org.uk) or alternative contact Lucy Smibert (lucy.smibert@naturalengland.org.uk).
